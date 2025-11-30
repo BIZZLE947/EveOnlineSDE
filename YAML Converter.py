@@ -29,7 +29,7 @@ from tqdm import tqdm
 # --- CONFIGURATION ---
 NON_ENGLISH_LOCALES = ['de', 'fr', 'ja', 'ru', 'zh', 'ko', 'es', 'it']
 
-# EVE Online Activity ID Mapping
+# EVE Online Activity ID Mapping (Name -> ID)
 ACTIVITY_MAP = {
     'manufacturing': 1,
     'research_time': 3,
@@ -38,6 +38,16 @@ ACTIVITY_MAP = {
     'invention': 8,
     'reaction': 11,
     'simple_reactions': 11 
+}
+
+# Reverse Mapping for Filenames (ID -> Name)
+REV_ACTIVITY_MAP = {
+    1: 'manufacturing',
+    3: 'research_time',
+    4: 'research_material',
+    5: 'copying',
+    8: 'invention',
+    11: 'reaction'
 }
 
 # --- SPECIAL LOGIC: BLUEPRINTS ---
@@ -130,8 +140,9 @@ def process_file_worker(args):
 
         # --- LOGIC BRANCHING ---
         filename = file_path.name.lower()
+        is_blueprints = "blueprints" in filename
 
-        if "blueprints" in filename:
+        if is_blueprints:
             df = parse_blueprints_special(data)
         elif "typematerials" in filename:
             df = parse_typematerials_special(data)
@@ -174,17 +185,33 @@ def process_file_worker(args):
             "columns": sorted(df.columns.tolist())
         }
 
-        # Save
+        # --- SAVE MASTER FILE ---
         if output_format == 'csv':
-            new_filename = file_path.with_suffix('.csv').name
-            output_path = output_dir / new_filename
+            master_filename = file_path.with_suffix('.csv').name
+            output_path = output_dir / master_filename
             df.to_csv(output_path, index=False, encoding='utf-8')
         elif output_format == 'excel':
-            new_filename = file_path.with_suffix('.xlsx').name
-            output_path = output_dir / new_filename
+            master_filename = file_path.with_suffix('.xlsx').name
+            output_path = output_dir / master_filename
             if len(df) > 1000000:
-                return False, f"{file_path.name}: Too many rows for Excel ({len(df)}). Use CSV.", None
+                return False, f"{file_path.name}: Too many rows for Excel. Use CSV.", None
             df.to_excel(output_path, index=False)
+
+        # --- SAVE SPLIT FILES (BLUEPRINTS ONLY) ---
+        if is_blueprints:
+            # Group by activityID and save individual files
+            for act_id, group_df in df.groupby('activityID'):
+                # Get name (e.g. 'manufacturing') or fallback to 'activity_1'
+                act_name = REV_ACTIVITY_MAP.get(act_id, f"activity_{act_id}")
+                
+                # Construct filename: blueprints_manufacturing.csv
+                split_filename = f"{file_path.stem}_{act_name}.{output_format}"
+                split_path = output_dir / split_filename
+                
+                if output_format == 'csv':
+                    group_df.to_csv(split_path, index=False, encoding='utf-8')
+                else:
+                    group_df.to_excel(split_path, index=False)
 
         return True, None, schema_info
 
@@ -217,9 +244,14 @@ def main():
     # --- RECURSIVE SCANNING ENABLED FOR SDE ---
     if target_path.is_dir():
         print(f"🔍 Scanning folder (Recursive): '{target_path}' ...")
-        # CHANGED to rglob (Recursive) to find files inside sde/fsd/ etc.
-        files_to_process.extend(target_path.rglob("*.yaml"))
-        files_to_process.extend(target_path.rglob("*.yml"))
+        
+        all_files = list(target_path.rglob("*.yaml")) + list(target_path.rglob("*.yml"))
+        
+        # FILTER: Exclude universe map data
+        for f in all_files:
+            if "universe" not in f.parts:
+                files_to_process.append(f)
+
         output_dir = target_path / "converted_output"
         output_dir.mkdir(exist_ok=True)
     else:
