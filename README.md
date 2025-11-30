@@ -19,8 +19,8 @@ Automatically checks *https://developers.eveonline.com/static-data* daily and co
 ### Installation
 1.  Clone the repository:
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/EveOnlineSDE.git](https://github.com/YOUR_USERNAME/EveOnlineSDE.git)
-    cd eve-sde-converter
+    git clone https://github.com/YOUR_USERNAME/EveOnlineSDE.git
+    cd EveOnlineSDE
     ```
 
 2.  Run the script (Dependencies auto-install):
