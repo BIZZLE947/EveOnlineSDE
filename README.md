@@ -2,7 +2,7 @@
 
 Automatically checks *https://developers.eveonline.com/static-data* daily and converts YAML files to CSV. 
 
-[![Latest Release](https://img.shields.io/github/v/release/BIZZLE947/eve-sde-converter)](https://github.com/BIZZLE947/EveOnlineSDE/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/BIZZLE947/EveOnlineSDE)](https://github.com/BIZZLE947/EveOnlineSDE/releases/latest)
 
 
 ## Assets include:
