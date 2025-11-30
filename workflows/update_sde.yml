@@ -1,0 +1,73 @@
+name: Update EVE SDE Data
+
+# Trigger the workflow on two conditions:
+on:
+  workflow_dispatch:       # Allows you to click a "Run Now" button manually
+  schedule:
+    - cron: '0 8 * * 2'    # Runs every Tuesday at 08:00 UTC (After EVE downtime)
+
+# Permission to write releases is required
+permissions:
+  contents: write
+
+jobs:
+  convert-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out your python script from the repo
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      # 3. Download the official EVE SDE from CCP's servers
+      - name: Download & Unzip SDE
+        run: |
+          echo "Downloading SDE..."
+          wget -O sde.zip https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip
+          echo "Unzipping..."
+          unzip -q sde.zip -d .
+          # This creates a folder named 'sde' in the root workspace
+
+      # 4. Install the libraries your script needs
+      - name: Install Dependencies
+        run: |
+          pip install pandas pyyaml openpyxl tqdm
+
+      # 5. Run YOUR conversion script
+      # Ensure the script name matches what is in your repo!
+      - name: Run Converter
+        run: |
+          python converter.py "sde" --format csv
+
+      # 6. Compress the output folder into a single ZIP file
+      - name: Zip Output
+        run: |
+          cd sde/converted_output
+          zip -r ../../eve_sde_csv.zip .
+          cd ../..
+
+      # 7. Generate the Date for the Tag (e.g., 2025-11-30)
+      - name: Get Date
+        id: date
+        run: echo "today=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      # 8. Create a GitHub Release and attach the ZIP
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: data-${{ steps.date.outputs.today }}
+          name: EVE SDE Data (${{ steps.date.outputs.today }})
+          body: |
+            Automated conversion of the EVE Online Static Data Export.
+            - Format: CSV
+            - Blueprints: Long-format relational
+            - TypeMaterials: Processed
+          files: eve_sde_csv.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
