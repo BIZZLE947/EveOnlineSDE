@@ -43,7 +43,7 @@ jobs:
       # Ensure the script name matches what is in your repo!
       - name: Run Converter
         run: |
-          python YAML Converter.py "sde" --format csv
+          python "YAML Converter.py" "sde" --format csv
 
       # 6. Compress the output folder into a single ZIP file
       - name: Zip Output
