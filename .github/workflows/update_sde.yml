@@ -1,27 +1,64 @@
 name: Update EVE SDE Data
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:       # Manual run button
   schedule:
-    - cron: '0 8 * * 2' # Tuesdays at 08:00 UTC
+    - cron: '0 */6 * * *'  # Run every 6 hours (Checks are cheap now!)
 
 permissions:
   contents: write
 
 jobs:
-  convert-and-release:
+  check-and-process:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------
+      # STEP 1: Check the SDE Server for the latest version date
+      # ---------------------------------------------------------
+      - name: Check SDE Version
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. Get the HTTP Header 'Last-Modified' from the EVE Server
+          # Example Output: "Mon, 25 Nov 2024 14:03:12 GMT"
+          RAW_DATE=$(curl -sI https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip | grep -i "last-modified" | cut -d' ' -f2-)
+          
+          # 2. Convert that date to a clean tag format: YYYYMMDD
+          # Example Output: 20241125
+          SDE_DATE=$(date -d "$RAW_DATE" +'%Y%m%d')
+          TAG="sde-$SDE_DATE"
+          
+          echo "🔹 Official SDE Date: $SDE_DATE"
+          echo "🔹 Proposed Tag: $TAG"
+          
+          # 3. Check if this Release already exists in your repo
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "✅ Release $TAG already exists."
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          else
+            echo "🚀 New SDE version detected! Proceeding..."
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+            echo "sde_date=$SDE_DATE" >> $GITHUB_OUTPUT
+          fi
+
+      # ---------------------------------------------------------
+      # STEP 2: The Heavy Lifting (Only runs if new version found)
+      # ---------------------------------------------------------
+      
       - name: Set up Python
+        if: steps.check.outputs.should_run == 'true'
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
       - name: Download & Unzip SDE
+        if: steps.check.outputs.should_run == 'true'
         run: |
           echo "Downloading SDE..."
           wget -O sde.zip https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip
@@ -29,37 +66,35 @@ jobs:
           unzip -q sde.zip -d sde
 
       - name: Install Dependencies
+        if: steps.check.outputs.should_run == 'true'
         run: |
           pip install pandas pyyaml openpyxl tqdm
 
       - name: Run Converter
+        if: steps.check.outputs.should_run == 'true'
         run: |
-          # Ensure filename matches your repository file exactly!
           python "YAML Converter.py" "sde" --format csv
 
       - name: Prepare Assets
+        if: steps.check.outputs.should_run == 'true'
         run: |
-          # 1. Move the Schema file OUT of the folder so it doesn't get zipped
           mv sde/converted_output/schema_map.json schema_map.json
-          
-          # 2. Zip the remaining CSV files
           cd sde/converted_output
           zip -r ../../eve_sde_csv.zip .
           cd ../..
 
-      - name: Get Date
-        id: date
-        run: echo "today=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
       - name: Create Release
+        if: steps.check.outputs.should_run == 'true'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: data-${{ steps.date.outputs.today }}
-          name: EVE SDE Data (${{ steps.date.outputs.today }})
+          tag_name: ${{ steps.check.outputs.release_tag }}
+          name: EVE SDE ${{ steps.check.outputs.sde_date }}
           body: |
+            **Official SDE Date:** ${{ steps.check.outputs.sde_date }}
+            
             Automated conversion of the EVE Online Static Data Export.
             - **eve_sde_csv.zip**: The converted CSV data files.
-            - **schema_map.json**: A roadmap of columns available in every file.
+            - **schema_map.json**: Column definitions.
           files: |
             eve_sde_csv.zip
             schema_map.json
