@@ -2,7 +2,7 @@
 
 Automatically checks *https://developers.eveonline.com/static-data* daily and converts YAML files to CSV. 
 
-[![Latest Release](https://img.shields.io/github/v/release/BIZZLE947/EveOnlineSDE)](https://github.com/BIZZLE947/EveOnlineSDE/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/BIZZLE947/EveOnlineSDE)](../../releases/latest)
 
 
 ## Assets include:
@@ -10,7 +10,7 @@ Automatically checks *https://developers.eveonline.com/static-data* daily and co
 2.  **schema_map.json**: A dictionary listing every file and its available columns.
 
 ## Download latest release
-[📥 Download Latest SDE Data (CSVs)](https://github.com/BIZZLE947/EveOnlineSDE/releases/latest)
+[📥 Download Latest SDE Data (CSVs)](../../releases/latest)
 
 ## Want to run locally?
 ### Prerequisites
