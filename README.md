@@ -2,7 +2,7 @@
 
 Automatically checks *https://developers.eveonline.com/static-data* daily and converts YAML files to CSV. 
 
-[![Latest Release](https://img.shields.io/github/v/release/BIZZLE947/eve-sde-converter)](https://github.com/BIZZLE947/eve-sde-converter/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/BIZZLE947/eve-sde-converter)](https://github.com/BIZZLE947/EveOnlineSDE/releases/latest)
 
 
 ## Assets include:
@@ -10,7 +10,7 @@ Automatically checks *https://developers.eveonline.com/static-data* daily and co
 2.  **schema_map.json**: A dictionary listing every file and its available columns.
 
 ## Download latest release
-[📥 Download Latest SDE Data (CSVs)](https://github.com/BIZZLE947E/eve-sde-converter/releases/latest)
+[📥 Download Latest SDE Data (CSVs)](https://github.com/BIZZLE947E/EveOnlineSDE/releases/latest)
 
 ## Want to run locally?
 ### Prerequisites
@@ -19,7 +19,7 @@ Automatically checks *https://developers.eveonline.com/static-data* daily and co
 ### Installation
 1.  Clone the repository:
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/eve-sde-converter.git](https://github.com/YOUR_USERNAME/eve-sde-converter.git)
+    git clone [https://github.com/YOUR_USERNAME/EveOnlineSDE.git](https://github.com/YOUR_USERNAME/EveOnlineSDE.git)
     cd eve-sde-converter
     ```
 
