@@ -3,7 +3,7 @@ name: Update EVE SDE Data
 on:
   workflow_dispatch:       # Manual run button
   schedule:
-    - cron: '0 */6 * * *'  # Run every 6 hours (Checks are cheap now!)
+    - cron: '0 */6 * * *'  # Run every 6 hours
 
 permissions:
   contents: write
@@ -17,34 +17,41 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------
-      # STEP 1: Check the SDE Server for the latest version date
+      # STEP 1: Check the Server for the latest Build Number
       # ---------------------------------------------------------
-      - name: Check SDE Version
+      - name: Check SDE Build Version
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Get the HTTP Header 'Last-Modified' from the EVE Server
-          # Example Output: "Mon, 25 Nov 2024 14:03:12 GMT"
-          RAW_DATE=$(curl -sI https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip | grep -i "last-modified" | cut -d' ' -f2-)
+          # 1. Ping the "Latest" URL and get the redirect target (Location header)
+          # The URL redirects to something like: .../eve-online-static-data-3118350-yaml.zip
+          REDIRECT_URL=$(curl -sIL -o /dev/null -w '%{url_effective}' https://developers.eveonline.com/static-data/eve-online-static-data-latest-yaml.zip)
           
-          # 2. Convert that date to a clean tag format: YYYYMMDD
-          # Example Output: 20241125
-          SDE_DATE=$(date -d "$RAW_DATE" +'%Y%m%d')
-          TAG="sde-$SDE_DATE"
+          # 2. Extract the Build Number using Regex
+          # Matches numbers after "static-data-" and before "-yaml"
+          if [[ $REDIRECT_URL =~ static-data-([0-9]+)-yaml ]]; then
+            BUILD_NUM="${BASH_REMATCH[1]}"
+          else
+            echo "⚠️ Could not parse build number from URL: $REDIRECT_URL"
+            # Fallback: Use date if build number fails
+            BUILD_NUM=$(date +'%Y%m%d')
+          fi
           
-          echo "🔹 Official SDE Date: $SDE_DATE"
+          TAG="sde-$BUILD_NUM"
+          
+          echo "🔹 Detected Build: $BUILD_NUM"
           echo "🔹 Proposed Tag: $TAG"
           
           # 3. Check if this Release already exists in your repo
           if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "✅ Release $TAG already exists."
+            echo "✅ Release $TAG already exists. No update needed."
             echo "should_run=false" >> $GITHUB_OUTPUT
           else
             echo "🚀 New SDE version detected! Proceeding..."
             echo "should_run=true" >> $GITHUB_OUTPUT
             echo "release_tag=$TAG" >> $GITHUB_OUTPUT
-            echo "sde_date=$SDE_DATE" >> $GITHUB_OUTPUT
+            echo "build_num=$BUILD_NUM" >> $GITHUB_OUTPUT
           fi
 
       # ---------------------------------------------------------
@@ -60,9 +67,12 @@ jobs:
       - name: Download & Unzip SDE
         if: steps.check.outputs.should_run == 'true'
         run: |
-          echo "Downloading SDE..."
-          wget -O sde.zip https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip
+          echo "Downloading Build ${{ steps.check.outputs.build_num }}..."
+          # Use the new LATEST link
+          wget -O sde.zip https://developers.eveonline.com/static-data/eve-online-static-data-latest-yaml.zip
+          
           echo "Unzipping..."
+          # We still force it into an 'sde' folder to keep the script happy
           unzip -q sde.zip -d sde
 
       - name: Install Dependencies
@@ -73,12 +83,16 @@ jobs:
       - name: Run Converter
         if: steps.check.outputs.should_run == 'true'
         run: |
+          # The script will now look inside the 'sde' folder we created
           python "YAML Converter.py" "sde" --format csv
 
       - name: Prepare Assets
         if: steps.check.outputs.should_run == 'true'
         run: |
+          # Move schema out
           mv sde/converted_output/schema_map.json schema_map.json
+          
+          # Zip the CSVs
           cd sde/converted_output
           zip -r ../../eve_sde_csv.zip .
           cd ../..
@@ -88,9 +102,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.check.outputs.release_tag }}
-          name: EVE SDE ${{ steps.check.outputs.sde_date }}
+          name: EVE SDE Build ${{ steps.check.outputs.build_num }}
           body: |
-            **Official SDE Date:** ${{ steps.check.outputs.sde_date }}
+            **Official Build:** ${{ steps.check.outputs.build_num }}
             
             Automated conversion of the EVE Online Static Data Export.
             - **eve_sde_csv.zip**: The converted CSV data files.
