@@ -71,7 +71,6 @@ def parse_blueprints_special(data):
                         'ProductQuantity': prod_qty
                     })
             else:
-                # Activity exists but no material input (rare, but possible)
                 rows.append({
                     'BlueprintTypeID': bp_id,
                     'activityID': act_id,
@@ -89,10 +88,7 @@ def parse_typematerials_special(data):
     """
     rows = []
     
-    # data structure: { root_id: { materials: [...], randomizedMaterials: [...] } }
     for item_id, attributes in data.items():
-        
-        # 1. Standard Materials
         if 'materials' in attributes:
             for mat in attributes['materials']:
                 rows.append({
@@ -102,7 +98,6 @@ def parse_typematerials_special(data):
                     'IsRandomized?': 'No'
                 })
 
-        # 2. Randomized Materials (if they exist)
         if 'randomizedMaterials' in attributes:
             for mat in attributes['randomizedMaterials']:
                 rows.append({
@@ -112,7 +107,6 @@ def parse_typematerials_special(data):
                     'IsRandomized?': 'Yes'
                 })
                 
-    # If a file is completely empty/malformed, return empty DF with correct columns
     if not rows:
         return pd.DataFrame(columns=['root_id', 'MaterialTypeID', 'MaterialQuantity', 'IsRandomized?'])
 
@@ -137,15 +131,10 @@ def process_file_worker(args):
         # --- LOGIC BRANCHING ---
         filename = file_path.name.lower()
 
-        # Branch A: Blueprints
         if "blueprints" in filename:
             df = parse_blueprints_special(data)
-            
-        # Branch B: Type Materials (Reprocessing)
         elif "typematerials" in filename:
             df = parse_typematerials_special(data)
-
-        # Branch C: Standard Handling for all other files
         else:
             if isinstance(data, list):
                 df = pd.json_normalize(data)
@@ -161,7 +150,7 @@ def process_file_worker(args):
             else:
                 return False, f"{file_path.name}: Unknown structure", None
             
-            # Standard cleanup for Branch C
+            # Standard cleanup
             df.columns = df.columns.astype(str)
             if not keep_all_langs:
                 cols_to_drop = [c for c in df.columns if any(c.endswith(f".{loc}") for loc in NON_ENGLISH_LOCALES)]
@@ -176,9 +165,7 @@ def process_file_worker(args):
                 if rename_map:
                     df.rename(columns=rename_map, inplace=True)
 
-        # -----------------------
-
-        # Manual Exclusions (Applies to all branches)
+        # Exclusions
         if exclude_cols:
             df = df.drop(columns=exclude_cols, errors='ignore')
 
@@ -227,10 +214,12 @@ def main():
     files_to_process = []
     output_dir = None
 
+    # --- RECURSIVE SCANNING ENABLED FOR SDE ---
     if target_path.is_dir():
-        print(f"🔍 Scanning folder: '{target_path}' ...")
-        files_to_process.extend(target_path.glob("*.yaml"))
-        files_to_process.extend(target_path.glob("*.yml"))
+        print(f"🔍 Scanning folder (Recursive): '{target_path}' ...")
+        # CHANGED to rglob (Recursive) to find files inside sde/fsd/ etc.
+        files_to_process.extend(target_path.rglob("*.yaml"))
+        files_to_process.extend(target_path.rglob("*.yml"))
         output_dir = target_path / "converted_output"
         output_dir.mkdir(exist_ok=True)
     else:
