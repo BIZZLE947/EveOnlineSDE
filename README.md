@@ -10,7 +10,7 @@ Automatically checks *https://developers.eveonline.com/static-data* daily and co
 2.  **schema_map.json**: A dictionary listing every file and its available columns.
 
 ## Download latest release
-[📥 Download Latest SDE Data (CSVs)](https://github.com/BIZZLE947E/EveOnlineSDE/releases/latest)
+[📥 Download Latest SDE Data (CSVs)](https://github.com/BIZZLE947/EveOnlineSDE/releases/latest)
 
 ## Want to run locally?
 ### Prerequisites
