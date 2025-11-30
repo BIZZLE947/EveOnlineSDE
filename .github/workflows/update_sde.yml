@@ -26,7 +26,6 @@ jobs:
           echo "Downloading SDE..."
           wget -O sde.zip https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip
           echo "Unzipping..."
-          # FIX 1: Extract into a folder named 'sde' explicitly
           unzip -q sde.zip -d sde
 
       - name: Install Dependencies
@@ -35,11 +34,15 @@ jobs:
 
       - name: Run Converter
         run: |
-          # FIX 2: Added quotes around the filename to handle the space
+          # Ensure filename matches your repository file exactly!
           python "YAML Converter.py" "sde" --format csv
 
-      - name: Zip Output
+      - name: Prepare Assets
         run: |
+          # 1. Move the Schema file OUT of the folder so it doesn't get zipped
+          mv sde/converted_output/schema_map.json schema_map.json
+          
+          # 2. Zip the remaining CSV files
           cd sde/converted_output
           zip -r ../../eve_sde_csv.zip .
           cd ../..
@@ -55,9 +58,10 @@ jobs:
           name: EVE SDE Data (${{ steps.date.outputs.today }})
           body: |
             Automated conversion of the EVE Online Static Data Export.
-            - Format: CSV
-            - Blueprints: Long-format relational
-            - TypeMaterials: Processed
-          files: eve_sde_csv.zip
+            - **eve_sde_csv.zip**: The converted CSV data files.
+            - **schema_map.json**: A roadmap of columns available in every file.
+          files: |
+            eve_sde_csv.zip
+            schema_map.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
