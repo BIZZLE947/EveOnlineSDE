@@ -1,0 +1,285 @@
+import sys
+import subprocess
+import importlib
+import os
+import argparse
+import json
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
+
+# --- 1. AUTO-DEPENDENCY CHECKER ---
+def ensure_package(package_name, import_name=None):
+    if import_name is None: import_name = package_name
+    try:
+        importlib.import_module(import_name)
+    except ImportError:
+        print(f"📦 Installing {package_name}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+
+ensure_package("pyyaml", "yaml")
+ensure_package("pandas")
+ensure_package("openpyxl")
+ensure_package("tqdm")
+
+import yaml
+import pandas as pd
+from tqdm import tqdm
+
+# --- CONFIGURATION ---
+NON_ENGLISH_LOCALES = ['de', 'fr', 'ja', 'ru', 'zh', 'ko', 'es', 'it']
+
+# EVE Online Activity ID Mapping
+ACTIVITY_MAP = {
+    'manufacturing': 1,
+    'research_time': 3,
+    'research_material': 4,
+    'copying': 5,
+    'invention': 8,
+    'reaction': 11,
+    'simple_reactions': 11 
+}
+
+# --- SPECIAL LOGIC: BLUEPRINTS ---
+def parse_blueprints_special(data):
+    """
+    Converts blueprints.yaml to Long Format.
+    """
+    rows = []
+    for bp_id, bp_data in data.items():
+        if 'activities' not in bp_data:
+            continue
+
+        for act_name, act_data in bp_data['activities'].items():
+            act_id = ACTIVITY_MAP.get(act_name, 99)
+            
+            # Products
+            products = act_data.get('products', [])
+            prod_id = products[0].get('typeID') if products else None
+            prod_qty = products[0].get('quantity') if products else None
+
+            # Materials
+            materials = act_data.get('materials', [])
+            if materials:
+                for mat in materials:
+                    rows.append({
+                        'BlueprintTypeID': bp_id,
+                        'activityID': act_id,
+                        'materialTypeID': mat.get('typeID'),
+                        'quantity': mat.get('quantity'),
+                        'ProductTypeID': prod_id,
+                        'ProductQuantity': prod_qty
+                    })
+            else:
+                # Activity exists but no material input (rare, but possible)
+                rows.append({
+                    'BlueprintTypeID': bp_id,
+                    'activityID': act_id,
+                    'materialTypeID': None,
+                    'quantity': None,
+                    'ProductTypeID': prod_id,
+                    'ProductQuantity': prod_qty
+                })
+    return pd.DataFrame(rows)
+
+# --- SPECIAL LOGIC: TYPE MATERIALS ---
+def parse_typematerials_special(data):
+    """
+    Converts typeMaterials.yaml to Long Format with Randomization flags.
+    """
+    rows = []
+    
+    # data structure: { root_id: { materials: [...], randomizedMaterials: [...] } }
+    for item_id, attributes in data.items():
+        
+        # 1. Standard Materials
+        if 'materials' in attributes:
+            for mat in attributes['materials']:
+                rows.append({
+                    'root_id': item_id,
+                    'MaterialTypeID': mat.get('materialTypeID'),
+                    'MaterialQuantity': mat.get('quantity'),
+                    'IsRandomized?': 'No'
+                })
+
+        # 2. Randomized Materials (if they exist)
+        if 'randomizedMaterials' in attributes:
+            for mat in attributes['randomizedMaterials']:
+                rows.append({
+                    'root_id': item_id,
+                    'MaterialTypeID': mat.get('materialTypeID'),
+                    'MaterialQuantity': mat.get('quantity'),
+                    'IsRandomized?': 'Yes'
+                })
+                
+    # If a file is completely empty/malformed, return empty DF with correct columns
+    if not rows:
+        return pd.DataFrame(columns=['root_id', 'MaterialTypeID', 'MaterialQuantity', 'IsRandomized?'])
+
+    return pd.DataFrame(rows)
+
+# --- WORKER FUNCTION ---
+def process_file_worker(args):
+    file_path, output_dir, output_format, exclude_cols, keep_all_langs = args
+    
+    try:
+        # 1. Fast Load
+        with open(file_path, 'r', encoding='utf-8') as f:
+            try:
+                data = yaml.load(f, Loader=yaml.CSafeLoader)
+            except (AttributeError, yaml.YAMLError):
+                f.seek(0)
+                data = yaml.safe_load(f)
+
+        if not data:
+            return False, f"{file_path.name}: Empty file", None
+
+        # --- LOGIC BRANCHING ---
+        filename = file_path.name.lower()
+
+        # Branch A: Blueprints
+        if "blueprints" in filename:
+            df = parse_blueprints_special(data)
+            
+        # Branch B: Type Materials (Reprocessing)
+        elif "typematerials" in filename:
+            df = parse_typematerials_special(data)
+
+        # Branch C: Standard Handling for all other files
+        else:
+            if isinstance(data, list):
+                df = pd.json_normalize(data)
+            elif isinstance(data, dict):
+                records = []
+                for key, value in data.items():
+                    if isinstance(value, dict):
+                        value['root_id'] = key 
+                        records.append(value)
+                    else:
+                        records.append({'root_id': key, 'value': value})
+                df = pd.json_normalize(records)
+            else:
+                return False, f"{file_path.name}: Unknown structure", None
+            
+            # Standard cleanup for Branch C
+            df.columns = df.columns.astype(str)
+            if not keep_all_langs:
+                cols_to_drop = [c for c in df.columns if any(c.endswith(f".{loc}") for loc in NON_ENGLISH_LOCALES)]
+                if cols_to_drop:
+                    df.drop(columns=cols_to_drop, inplace=True)
+                rename_map = {}
+                for col in df.columns:
+                    if col.endswith('.en'):
+                        clean_name = col[:-3]
+                        if clean_name not in df.columns:
+                            rename_map[col] = clean_name
+                if rename_map:
+                    df.rename(columns=rename_map, inplace=True)
+
+        # -----------------------
+
+        # Manual Exclusions (Applies to all branches)
+        if exclude_cols:
+            df = df.drop(columns=exclude_cols, errors='ignore')
+
+        schema_info = {
+            "file": file_path.name,
+            "columns": sorted(df.columns.tolist())
+        }
+
+        # Save
+        if output_format == 'csv':
+            new_filename = file_path.with_suffix('.csv').name
+            output_path = output_dir / new_filename
+            df.to_csv(output_path, index=False, encoding='utf-8')
+        elif output_format == 'excel':
+            new_filename = file_path.with_suffix('.xlsx').name
+            output_path = output_dir / new_filename
+            if len(df) > 1000000:
+                return False, f"{file_path.name}: Too many rows for Excel ({len(df)}). Use CSV.", None
+            df.to_excel(output_path, index=False)
+
+        return True, None, schema_info
+
+    except Exception as e:
+        return False, f"{file_path.name}: {str(e)}", None
+
+# --- MAIN EXECUTION ---
+def main():
+    parser = argparse.ArgumentParser(description="EVE SDE YAML Master Converter.")
+    parser.add_argument("input_path", help="Path to file or folder")
+    parser.add_argument("-f", "--format", choices=['csv', 'excel'], default='csv')
+    parser.add_argument("-e", "--exclude", help="Comma-separated columns to remove")
+    parser.add_argument("--keep-all-langs", action="store_true", help="Keep non-English text")
+    parser.add_argument("--workers", type=int, default=os.cpu_count(), help="Cores to use")
+
+    args = parser.parse_args()
+
+    exclude_list = []
+    if args.exclude:
+        exclude_list = [x.strip() for x in args.exclude.split(',')]
+
+    target_path = Path(args.input_path)
+    if not target_path.exists():
+        print(f"Error: Path '{args.input_path}' not found.")
+        sys.exit(1)
+
+    files_to_process = []
+    output_dir = None
+
+    if target_path.is_dir():
+        print(f"🔍 Scanning folder: '{target_path}' ...")
+        files_to_process.extend(target_path.glob("*.yaml"))
+        files_to_process.extend(target_path.glob("*.yml"))
+        output_dir = target_path / "converted_output"
+        output_dir.mkdir(exist_ok=True)
+    else:
+        if target_path.suffix in ['.yaml', '.yml']:
+            files_to_process.append(target_path)
+            output_dir = target_path.parent
+
+    total_files = len(files_to_process)
+    if total_files == 0:
+        print("No YAML files found.")
+        sys.exit()
+
+    print(f"🚀 Found {total_files} files. Engine: {args.workers} cores.")
+
+    tasks = []
+    for f in files_to_process:
+        if "converted_output" in str(f): continue
+        tasks.append((f, output_dir, args.format, exclude_list, args.keep_all_langs))
+
+    success_count = 0
+    errors = []
+    master_schema = {}
+
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = [executor.submit(process_file_worker, task) for task in tasks]
+        
+        for future in tqdm(as_completed(futures), total=len(futures), unit="file", colour='cyan'):
+            success, msg, schema_data = future.result()
+            if success:
+                success_count += 1
+                if schema_data:
+                    master_schema[schema_data['file']] = schema_data['columns']
+            else:
+                errors.append(msg)
+
+    if master_schema:
+        schema_path = output_dir / "schema_map.json"
+        try:
+            with open(schema_path, 'w', encoding='utf-8') as jf:
+                json.dump(master_schema, jf, indent=4)
+        except Exception: pass
+
+    print(f"\n✅ Completed: {success_count}/{len(tasks)}")
+    if errors:
+        log_path = output_dir / "conversion_errors.log"
+        with open(log_path, "w", encoding="utf-8") as log:
+            log.write("Errors:\n")
+            for err in errors: log.write(f"- {err}\n")
+        print(f"⚠️ {len(errors)} errors log saved.")
+
+if __name__ == "__main__":
+    main()
