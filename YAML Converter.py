@@ -214,11 +214,17 @@ def process_file_worker(args):
             # 2. Consolidated Product Map (All Activities)
             prod_cols = ['BlueprintTypeID', 'activityID', 'ProductTypeID', 'ProductQuantity']
             
-            # UNIQUE FIX: Drop duplicates based strictly on the Key Columns.
-            # This ensures (BP + Activity + Product) is a Primary Key.
-            products_df = df[prod_cols].dropna(subset=['ProductTypeID']).drop_duplicates(
-                subset=['BlueprintTypeID', 'activityID', 'ProductTypeID']
-            )
+            # Filter rows that have products
+            products_df = df[prod_cols].dropna(subset=['ProductTypeID']).copy()
+            
+            # FORCE INTEGER TYPES on Keys to prevent Float/Int mismatch duplicates
+            products_df['BlueprintTypeID'] = products_df['BlueprintTypeID'].astype('int64')
+            products_df['activityID'] = products_df['activityID'].astype('int64')
+            products_df['ProductTypeID'] = products_df['ProductTypeID'].astype('int64')
+            
+            # NUCLEAR OPTION: GroupBy + Head(1)
+            # This forces exactly 1 row per unique key combination, guaranteed.
+            products_df = products_df.groupby(['BlueprintTypeID', 'activityID', 'ProductTypeID']).head(1)
             
             prod_filename = f"{file_path.stem}_products.{output_format}"
             prod_path = output_dir / prod_filename
