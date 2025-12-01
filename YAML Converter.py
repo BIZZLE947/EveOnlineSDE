@@ -212,12 +212,13 @@ def process_file_worker(args):
                     group_df.to_excel(split_path, index=False)
 
             # 2. Consolidated Product Map (All Activities)
-            # Create a simplified table: Blueprint -> Product
-            # We select relevant columns and drop duplicates to remove the "Material" rows
             prod_cols = ['BlueprintTypeID', 'activityID', 'ProductTypeID', 'ProductQuantity']
             
-            # Filter: Ensure we only list rows that actually produce something
-            products_df = df[prod_cols].dropna(subset=['ProductTypeID']).drop_duplicates()
+            # UNIQUE FIX: Drop duplicates based strictly on the Key Columns.
+            # This ensures (BP + Activity + Product) is a Primary Key.
+            products_df = df[prod_cols].dropna(subset=['ProductTypeID']).drop_duplicates(
+                subset=['BlueprintTypeID', 'activityID', 'ProductTypeID']
+            )
             
             prod_filename = f"{file_path.stem}_products.{output_format}"
             prod_path = output_dir / prod_filename
