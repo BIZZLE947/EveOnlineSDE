@@ -199,12 +199,10 @@ def process_file_worker(args):
 
         # --- SAVE SPLIT FILES (BLUEPRINTS ONLY) ---
         if is_blueprints:
-            # Group by activityID and save individual files
             for act_id, group_df in df.groupby('activityID'):
-                # Get name (e.g. 'manufacturing') or fallback to 'activity_1'
                 act_name = REV_ACTIVITY_MAP.get(act_id, f"activity_{act_id}")
                 
-                # Construct filename: blueprints_manufacturing.csv
+                # 1. Save the Full (Detailed) Activity File
                 split_filename = f"{file_path.stem}_{act_name}.{output_format}"
                 split_path = output_dir / split_filename
                 
@@ -212,6 +210,20 @@ def process_file_worker(args):
                     group_df.to_csv(split_path, index=False, encoding='utf-8')
                 else:
                     group_df.to_excel(split_path, index=False)
+                
+                # 2. NEW: Save the "Products Only" Unique Map (Manufacturing Only)
+                if act_name == 'manufacturing':
+                    unique_cols = ['BlueprintTypeID', 'ProductTypeID', 'ProductQuantity']
+                    # Drop duplicates so we get 1 row per blueprint
+                    unique_df = group_df[unique_cols].drop_duplicates()
+                    
+                    prod_filename = f"{file_path.stem}_{act_name}_products.{output_format}"
+                    prod_path = output_dir / prod_filename
+                    
+                    if output_format == 'csv':
+                        unique_df.to_csv(prod_path, index=False, encoding='utf-8')
+                    else:
+                        unique_df.to_excel(prod_path, index=False)
 
         return True, None, schema_info
 
