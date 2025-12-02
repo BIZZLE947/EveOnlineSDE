@@ -69,8 +69,9 @@ def parse_blueprints_special(data):
             
             # --- STREAM 1: PRODUCTS ---
             # Iterate strictly over the 'products' list in YAML.
-            # If YAML has 1 product, we generate 1 row. No duplication possible.
+            # If YAML has 1 product, we generate 1 row. 
             products = act_data.get('products', [])
+            
             if products:
                 for prod in products:
                     prod_rows.append({
@@ -82,10 +83,9 @@ def parse_blueprints_special(data):
             
             # --- STREAM 2: MATERIALS ---
             # Iterate strictly over the 'materials' list in YAML.
-            # We add Product info here purely for context in the main file,
-            # but this is NOT the source for the blueprints_products file anymore.
+            # We reference the main product just for context, but this df 
+            # is NOT used to generate the products csv.
             
-            # Grab first product just for reference in the materials table
             ref_prod_id = products[0].get('typeID') if products else None
             ref_prod_qty = products[0].get('quantity') if products else None
 
@@ -97,7 +97,6 @@ def parse_blueprints_special(data):
                         'activityID': act_id,
                         'materialTypeID': mat.get('typeID'),
                         'quantity': mat.get('quantity'),
-                        # These are kept for the main file, but ignored for the product map
                         'ProductTypeID': ref_prod_id, 
                         'ProductQuantity': ref_prod_qty
                     })
@@ -243,10 +242,13 @@ def process_file_worker(args):
                     group_df.to_excel(split_path, index=False)
 
             # 2. Consolidated Product Map (Clean Product List)
-            # We use the separate df_products we created earlier.
-            # This is generated DIRECTLY from the product list in YAML, so no duplicates possible.
+            # This is generated DIRECTLY from the product list in YAML, 
+            # so no material-based duplication is possible.
             prod_filename = f"{file_path.stem}_products.{output_format}"
             prod_path = output_dir / prod_filename
+            
+            # Final Safety Net: Sort by ID to ensure order
+            df_products = df_products.sort_values(by=['BlueprintTypeID', 'activityID'])
             
             if output_format == 'csv':
                 df_products.to_csv(prod_path, index=False, encoding='utf-8')
@@ -281,10 +283,13 @@ def main():
     files_to_process = []
     output_dir = None
 
+    # --- RECURSIVE SCANNING ENABLED FOR SDE ---
     if target_path.is_dir():
         print(f"🔍 Scanning folder (Recursive): '{target_path}' ...")
+        
         all_files = list(target_path.rglob("*.yaml")) + list(target_path.rglob("*.yml"))
         
+        # FILTER: Exclude universe map data
         for f in all_files:
             if "universe" not in f.parts:
                 files_to_process.append(f)

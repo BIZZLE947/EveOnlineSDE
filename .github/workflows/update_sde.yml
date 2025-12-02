@@ -17,31 +17,41 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------
-      # STEP 1: Check SDE Version & Get Date
+      # STEP 1: Check SDE Version & Server Date
       # ---------------------------------------------------------
       - name: Check SDE Build Version
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Get Build Number from URL
+          # 1. Resolve the Redirect URL to get the specific file path
           REDIRECT_URL=$(curl -sIL -o /dev/null -w '%{url_effective}' https://developers.eveonline.com/static-data/eve-online-static-data-latest-yaml.zip)
           
+          # 2. Extract Build Number from URL
           if [[ $REDIRECT_URL =~ static-data-([0-9]+)-yaml ]]; then
             BUILD_NUM="${BASH_REMATCH[1]}"
           else
+            # Fallback if URL format changes
             BUILD_NUM=$(date +'%Y%m%d')
+          fi
+          
+          # 3. Extract the Official 'Last-Modified' Date from the Server Headers
+          # This gets the date CCP uploaded the file, not today's date.
+          SERVER_HEADER=$(curl -sI "$REDIRECT_URL" | grep -i "last-modified" | cut -d' ' -f2-)
+          
+          # Convert "Mon, 27 Nov 2025..." to "2025-11-27"
+          if [ -n "$SERVER_HEADER" ]; then
+            OFFICIAL_DATE=$(date -d "$SERVER_HEADER" +'%Y-%m-%d')
+          else
+            OFFICIAL_DATE=$(date +'%Y-%m-%d') # Fallback to today
           fi
           
           TAG="sde-$BUILD_NUM"
           
-          # 2. Get Today's Date (For the Release Title)
-          TODAY=$(date +'%Y-%m-%d')
-          
           echo "🔹 Detected Build: $BUILD_NUM"
-          echo "🔹 Date: $TODAY"
+          echo "🔹 Official Date: $OFFICIAL_DATE"
           
-          # 3. Check if release exists
+          # 4. Check if release exists
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "✅ Release $TAG already exists."
             echo "should_run=false" >> $GITHUB_OUTPUT
@@ -50,7 +60,7 @@ jobs:
             echo "should_run=true" >> $GITHUB_OUTPUT
             echo "release_tag=$TAG" >> $GITHUB_OUTPUT
             echo "build_num=$BUILD_NUM" >> $GITHUB_OUTPUT
-            echo "release_date=$TODAY" >> $GITHUB_OUTPUT
+            echo "sde_date=$OFFICIAL_DATE" >> $GITHUB_OUTPUT
           fi
 
       # ---------------------------------------------------------
@@ -93,11 +103,11 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.check.outputs.release_tag }}
-          # CHANGE IS HERE: Updated the Naming Format
-          name: Build ${{ steps.check.outputs.build_num }} | ${{ steps.check.outputs.release_date }}
+          # UPDATED TITLE FORMAT
+          name: Build ${{ steps.check.outputs.build_num }} | ${{ steps.check.outputs.sde_date }}
           body: |
             **Official Build:** ${{ steps.check.outputs.build_num }}
-            **Date:** ${{ steps.check.outputs.release_date }}
+            **Official Release Date:** ${{ steps.check.outputs.sde_date }}
             
             Automated conversion of the EVE Online Static Data Export.
           files: |
