@@ -68,8 +68,6 @@ def parse_blueprints_special(data):
             act_id = ACTIVITY_MAP.get(act_name, 99)
             
             # --- STREAM 1: PRODUCTS ---
-            # Iterate strictly over the 'products' list in YAML.
-            # If YAML has 1 product, we generate 1 row. 
             products = act_data.get('products', [])
             
             if products:
@@ -82,10 +80,6 @@ def parse_blueprints_special(data):
                     })
             
             # --- STREAM 2: MATERIALS ---
-            # Iterate strictly over the 'materials' list in YAML.
-            # We reference the main product just for context, but this df 
-            # is NOT used to generate the products csv.
-            
             ref_prod_id = products[0].get('typeID') if products else None
             ref_prod_qty = products[0].get('quantity') if products else None
 
@@ -213,8 +207,8 @@ def process_file_worker(args):
             "columns": sorted(df_main.columns.tolist())
         }
 
-        # --- SAVE MAIN FILE ---
-        # For blueprints, this is the Materials file (inputs)
+        # --- SAVE MASTER FILE ---
+        # For blueprints, this is the Materials file (All Activities)
         # For others, it's the standard file
         if output_format == 'csv':
             master_filename = file_path.with_suffix('.csv').name
@@ -229,7 +223,7 @@ def process_file_worker(args):
 
         # --- SAVE BLUEPRINT SUB-FILES ---
         if is_blueprints:
-            # 1. Activity Split Files (Detailed Materials)
+            # 1. Activity Split Files (Individual files for debugging/specific use)
             for act_id, group_df in df_main.groupby('activityID'):
                 act_name = REV_ACTIVITY_MAP.get(act_id, f"activity_{act_id}")
                 
@@ -242,18 +236,29 @@ def process_file_worker(args):
                     group_df.to_excel(split_path, index=False)
 
             # 2. Consolidated Product Map (Clean Product List)
-            # This is generated DIRECTLY from the product list in YAML, 
-            # so no material-based duplication is possible.
             prod_filename = f"{file_path.stem}_products.{output_format}"
             prod_path = output_dir / prod_filename
             
-            # Final Safety Net: Sort by ID to ensure order
+            # Sort for tidiness
             df_products = df_products.sort_values(by=['BlueprintTypeID', 'activityID'])
             
             if output_format == 'csv':
                 df_products.to_csv(prod_path, index=False, encoding='utf-8')
             else:
                 df_products.to_excel(prod_path, index=False)
+            
+            # 3. NEW: Consolidated Materials Map (Filtered)
+            # Filter for Manufacturing (1), Invention (8), and Reactions (11)
+            target_activities = [1, 8, 11]
+            materials_df = df_main[df_main['activityID'].isin(target_activities)].copy()
+            
+            mat_filename = f"{file_path.stem}_materials.{output_format}"
+            mat_path = output_dir / mat_filename
+            
+            if output_format == 'csv':
+                materials_df.to_csv(mat_path, index=False, encoding='utf-8')
+            else:
+                materials_df.to_excel(mat_path, index=False)
 
         return True, None, schema_info
 
