@@ -50,12 +50,16 @@ REV_ACTIVITY_MAP = {
     11: 'reaction'
 }
 
-# --- SPECIAL LOGIC: BLUEPRINTS ---
+# --- SPECIAL LOGIC: BLUEPRINTS (DUAL STREAM) ---
 def parse_blueprints_special(data):
     """
-    Converts blueprints.yaml to Long Format.
+    Parses blueprints into TWO separate datasets:
+    1. Materials (Inputs)
+    2. Products (Outputs)
     """
-    rows = []
+    mat_rows = []
+    prod_rows = []
+
     for bp_id, bp_data in data.items():
         if 'activities' not in bp_data:
             continue
@@ -63,41 +67,59 @@ def parse_blueprints_special(data):
         for act_name, act_data in bp_data['activities'].items():
             act_id = ACTIVITY_MAP.get(act_name, 99)
             
-            # Products
+            # --- STREAM 1: PRODUCTS ---
+            # Iterate strictly over the 'products' list in YAML.
+            # If YAML has 1 product, we generate 1 row. No duplication possible.
             products = act_data.get('products', [])
-            prod_id = products[0].get('typeID') if products else None
-            prod_qty = products[0].get('quantity') if products else None
+            if products:
+                for prod in products:
+                    prod_rows.append({
+                        'BlueprintTypeID': bp_id,
+                        'activityID': act_id,
+                        'ProductTypeID': prod.get('typeID'),
+                        'ProductQuantity': prod.get('quantity')
+                    })
+            
+            # --- STREAM 2: MATERIALS ---
+            # Iterate strictly over the 'materials' list in YAML.
+            # We add Product info here purely for context in the main file,
+            # but this is NOT the source for the blueprints_products file anymore.
+            
+            # Grab first product just for reference in the materials table
+            ref_prod_id = products[0].get('typeID') if products else None
+            ref_prod_qty = products[0].get('quantity') if products else None
 
-            # Materials
             materials = act_data.get('materials', [])
             if materials:
                 for mat in materials:
-                    rows.append({
+                    mat_rows.append({
                         'BlueprintTypeID': bp_id,
                         'activityID': act_id,
                         'materialTypeID': mat.get('typeID'),
                         'quantity': mat.get('quantity'),
-                        'ProductTypeID': prod_id,
-                        'ProductQuantity': prod_qty
+                        # These are kept for the main file, but ignored for the product map
+                        'ProductTypeID': ref_prod_id, 
+                        'ProductQuantity': ref_prod_qty
                     })
             else:
-                rows.append({
+                # Add placeholder if activity exists but no materials
+                mat_rows.append({
                     'BlueprintTypeID': bp_id,
                     'activityID': act_id,
                     'materialTypeID': None,
                     'quantity': None,
-                    'ProductTypeID': prod_id,
-                    'ProductQuantity': prod_qty
+                    'ProductTypeID': ref_prod_id,
+                    'ProductQuantity': ref_prod_qty
                 })
-    return pd.DataFrame(rows)
+
+    return {
+        'materials': pd.DataFrame(mat_rows),
+        'products': pd.DataFrame(prod_rows)
+    }
 
 # --- SPECIAL LOGIC: TYPE MATERIALS ---
 def parse_typematerials_special(data):
-    """
-    Converts typeMaterials.yaml to Long Format with Randomization flags.
-    """
     rows = []
-    
     for item_id, attributes in data.items():
         if 'materials' in attributes:
             for mat in attributes['materials']:
@@ -119,7 +141,6 @@ def parse_typematerials_special(data):
                 
     if not rows:
         return pd.DataFrame(columns=['root_id', 'MaterialTypeID', 'MaterialQuantity', 'IsRandomized?'])
-
     return pd.DataFrame(rows)
 
 # --- WORKER FUNCTION ---
@@ -127,7 +148,6 @@ def process_file_worker(args):
     file_path, output_dir, output_format, exclude_cols, keep_all_langs = args
     
     try:
-        # 1. Fast Load
         with open(file_path, 'r', encoding='utf-8') as f:
             try:
                 data = yaml.load(f, Loader=yaml.CSafeLoader)
@@ -142,13 +162,22 @@ def process_file_worker(args):
         filename = file_path.name.lower()
         is_blueprints = "blueprints" in filename
 
+        # Initialize DataFrames
+        df_main = None
+        df_products = None # Only used for blueprints
+
         if is_blueprints:
-            df = parse_blueprints_special(data)
+            # Returns a Dictionary of DataFrames
+            bp_data = parse_blueprints_special(data)
+            df_main = bp_data['materials']
+            df_products = bp_data['products']
+            
         elif "typematerials" in filename:
-            df = parse_typematerials_special(data)
+            df_main = parse_typematerials_special(data)
         else:
+            # Standard Flattening
             if isinstance(data, list):
-                df = pd.json_normalize(data)
+                df_main = pd.json_normalize(data)
             elif isinstance(data, dict):
                 records = []
                 for key, value in data.items():
@@ -157,50 +186,52 @@ def process_file_worker(args):
                         records.append(value)
                     else:
                         records.append({'root_id': key, 'value': value})
-                df = pd.json_normalize(records)
+                df_main = pd.json_normalize(records)
             else:
                 return False, f"{file_path.name}: Unknown structure", None
             
-            # Standard cleanup
-            df.columns = df.columns.astype(str)
+            # Standard Cleanup
+            df_main.columns = df_main.columns.astype(str)
             if not keep_all_langs:
-                cols_to_drop = [c for c in df.columns if any(c.endswith(f".{loc}") for loc in NON_ENGLISH_LOCALES)]
+                cols_to_drop = [c for c in df_main.columns if any(c.endswith(f".{loc}") for loc in NON_ENGLISH_LOCALES)]
                 if cols_to_drop:
-                    df.drop(columns=cols_to_drop, inplace=True)
+                    df_main.drop(columns=cols_to_drop, inplace=True)
                 rename_map = {}
-                for col in df.columns:
+                for col in df_main.columns:
                     if col.endswith('.en'):
                         clean_name = col[:-3]
-                        if clean_name not in df.columns:
+                        if clean_name not in df_main.columns:
                             rename_map[col] = clean_name
                 if rename_map:
-                    df.rename(columns=rename_map, inplace=True)
+                    df_main.rename(columns=rename_map, inplace=True)
 
         # Exclusions
-        if exclude_cols:
-            df = df.drop(columns=exclude_cols, errors='ignore')
+        if exclude_cols and df_main is not None:
+            df_main = df_main.drop(columns=exclude_cols, errors='ignore')
 
         schema_info = {
             "file": file_path.name,
-            "columns": sorted(df.columns.tolist())
+            "columns": sorted(df_main.columns.tolist())
         }
 
-        # --- SAVE MASTER FILE ---
+        # --- SAVE MAIN FILE ---
+        # For blueprints, this is the Materials file (inputs)
+        # For others, it's the standard file
         if output_format == 'csv':
             master_filename = file_path.with_suffix('.csv').name
             output_path = output_dir / master_filename
-            df.to_csv(output_path, index=False, encoding='utf-8')
+            df_main.to_csv(output_path, index=False, encoding='utf-8')
         elif output_format == 'excel':
             master_filename = file_path.with_suffix('.xlsx').name
             output_path = output_dir / master_filename
-            if len(df) > 1000000:
+            if len(df_main) > 1000000:
                 return False, f"{file_path.name}: Too many rows for Excel. Use CSV.", None
-            df.to_excel(output_path, index=False)
+            df_main.to_excel(output_path, index=False)
 
-        # --- SPECIAL OUTPUTS FOR BLUEPRINTS ---
+        # --- SAVE BLUEPRINT SUB-FILES ---
         if is_blueprints:
-            # 1. Activity Split Files (Detailed)
-            for act_id, group_df in df.groupby('activityID'):
+            # 1. Activity Split Files (Detailed Materials)
+            for act_id, group_df in df_main.groupby('activityID'):
                 act_name = REV_ACTIVITY_MAP.get(act_id, f"activity_{act_id}")
                 
                 split_filename = f"{file_path.stem}_{act_name}.{output_format}"
@@ -211,28 +242,16 @@ def process_file_worker(args):
                 else:
                     group_df.to_excel(split_path, index=False)
 
-            # 2. Consolidated Product Map (All Activities)
-            prod_cols = ['BlueprintTypeID', 'activityID', 'ProductTypeID', 'ProductQuantity']
-            
-            # Filter rows that have products
-            products_df = df[prod_cols].dropna(subset=['ProductTypeID']).copy()
-            
-            # FORCE INTEGER TYPES on Keys to prevent Float/Int mismatch duplicates
-            products_df['BlueprintTypeID'] = products_df['BlueprintTypeID'].astype('int64')
-            products_df['activityID'] = products_df['activityID'].astype('int64')
-            products_df['ProductTypeID'] = products_df['ProductTypeID'].astype('int64')
-            
-            # NUCLEAR OPTION: GroupBy + Head(1)
-            # This forces exactly 1 row per unique key combination, guaranteed.
-            products_df = products_df.groupby(['BlueprintTypeID', 'activityID', 'ProductTypeID']).head(1)
-            
+            # 2. Consolidated Product Map (Clean Product List)
+            # We use the separate df_products we created earlier.
+            # This is generated DIRECTLY from the product list in YAML, so no duplicates possible.
             prod_filename = f"{file_path.stem}_products.{output_format}"
             prod_path = output_dir / prod_filename
             
             if output_format == 'csv':
-                products_df.to_csv(prod_path, index=False, encoding='utf-8')
+                df_products.to_csv(prod_path, index=False, encoding='utf-8')
             else:
-                products_df.to_excel(prod_path, index=False)
+                df_products.to_excel(prod_path, index=False)
 
         return True, None, schema_info
 
@@ -262,13 +281,10 @@ def main():
     files_to_process = []
     output_dir = None
 
-    # --- RECURSIVE SCANNING ENABLED FOR SDE ---
     if target_path.is_dir():
         print(f"🔍 Scanning folder (Recursive): '{target_path}' ...")
-        
         all_files = list(target_path.rglob("*.yaml")) + list(target_path.rglob("*.yml"))
         
-        # FILTER: Exclude universe map data
         for f in all_files:
             if "universe" not in f.parts:
                 files_to_process.append(f)
