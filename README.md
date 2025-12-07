@@ -19,7 +19,7 @@ Automatically checks *https://developers.eveonline.com/static-data* daily and co
 ### Installation
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/YOUR_USERNAME/EveOnlineSDE.git
+    git clone https://github.com/BIZZLE947/EveOnlineSDE.git
     cd EveOnlineSDE
     ```
 
